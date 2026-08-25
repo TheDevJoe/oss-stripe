@@ -3,7 +3,7 @@ import Stripe from 'stripe';
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 const SUPA = process.env.SUPABASE_URL;
 const SERVICE = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const PLATFORM_FEE_CENTS = 150; // $1.50 flat per donation
+const PLATFORM_FEE_CENTS = 150;
 
 export const handler = async (event) => {
   if (event.httpMethod === 'OPTIONS') return { statusCode: 200, headers: cors(), body: '' };
