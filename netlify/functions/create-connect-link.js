@@ -4,8 +4,8 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 const SUPA = process.env.SUPABASE_URL;
 const ANON = process.env.SUPABASE_ANON_KEY;
 const SERVICE = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const RETURN_URL = 'https://oss-stripe.netlify.app/';
-const REFRESH_URL = 'https://oss-stripe.netlify.app/';
+const RETURN_URL = 'https://oss-stripe.netlify.app/return';
+const REFRESH_URL = 'https://oss-stripe.netlify.app/refresh';
 
 export const handler = async (event) => {
   if (event.httpMethod === 'OPTIONS') return { statusCode: 200, headers: cors(), body: '' };
