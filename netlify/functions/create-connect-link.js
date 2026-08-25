@@ -2,48 +2,68 @@ import Stripe from 'stripe';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 const SUPA = process.env.SUPABASE_URL;
+const ANON = process.env.SUPABASE_ANON_KEY;
 const SERVICE = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const PLATFORM_FEE_CENTS = 150; // $1.50 flat per donation
+const RETURN_URL = process.env.STRIPE_RETURN_URL || 'oursundayschedule://stripe/return';
+const REFRESH_URL = process.env.STRIPE_REFRESH_URL || 'oursundayschedule://stripe/refresh';
 
 export const handler = async (event) => {
   if (event.httpMethod === 'OPTIONS') return { statusCode: 200, headers: cors(), body: '' };
   try {
-    const { orgId, amountCents, donorName, donorEmail } = JSON.parse(event.body || '{}');
-    if (!orgId || !amountCents) return json(400, { error: 'orgId and amountCents required' });
-    if (amountCents < 200) return json(400, { error: 'Minimum donation is $2.00' });
+    const { orgId, jwt } = JSON.parse(event.body || '{}');
+    if (!orgId || !jwt) return json(400, { error: 'orgId and jwt required' });
 
-    const orgRes = await fetch(`${SUPA}/rest/v1/organizations?id=eq.${orgId}&select=stripe_account_id,stripe_charges_enabled,name`, {
+    await requireAdmin(jwt, orgId);
+
+    const orgRes = await fetch(`${SUPA}/rest/v1/organizations?id=eq.${orgId}&select=stripe_account_id,name`, {
       headers: { apikey: SERVICE, Authorization: `Bearer ${SERVICE}` }
     });
     const [org] = await orgRes.json();
     if (!org) return json(404, { error: 'Church not found' });
-    if (!org.stripe_account_id || !org.stripe_charges_enabled) {
-      return json(400, { error: 'This church has not set up donations yet' });
+
+    let accountId = org.stripe_account_id;
+    if (!accountId) {
+      const account = await stripe.accounts.create({
+        type: 'express',
+        capabilities: {
+          card_payments: { requested: true },
+          transfers: { requested: true }
+        },
+        business_profile: { name: org.name, mcc: '8398' }
+      });
+      accountId = account.id;
+      await fetch(`${SUPA}/rest/v1/organizations?id=eq.${orgId}`, {
+        method: 'PATCH',
+        headers: { apikey: SERVICE, Authorization: `Bearer ${SERVICE}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stripe_account_id: accountId })
+      });
     }
 
-    const pi = await stripe.paymentIntents.create({
-      amount: amountCents,
-      currency: 'usd',
-      application_fee_amount: PLATFORM_FEE_CENTS,
-      transfer_data: { destination: org.stripe_account_id },
-      automatic_payment_methods: { enabled: true },
-      description: `Donation to ${org.name}`,
-      metadata: {
-        org_id: orgId,
-        donor_name: donorName || '',
-        donor_email: donorEmail || ''
-      }
+    const link = await stripe.accountLinks.create({
+      account: accountId,
+      refresh_url: REFRESH_URL,
+      return_url: RETURN_URL,
+      type: 'account_onboarding'
     });
 
-    return json(200, {
-      clientSecret: pi.client_secret,
-      publishableKey: process.env.STRIPE_PUBLISHABLE_KEY,
-      churchName: org.name
-    });
+    return json(200, { url: link.url, accountId });
   } catch (e) {
     return json(400, { error: e.message });
   }
 };
+
+async function requireAdmin(jwt, orgId) {
+  const userRes = await fetch(`${SUPA}/auth/v1/user`, {
+    headers: { apikey: ANON, Authorization: `Bearer ${jwt}` }
+  });
+  const user = await userRes.json();
+  if (!user.email) throw new Error('Not authenticated');
+  const check = await fetch(`${SUPA}/rest/v1/users?email=eq.${user.email}&select=is_admin,org_id`, {
+    headers: { apikey: SERVICE, Authorization: `Bearer ${SERVICE}` }
+  });
+  const [row] = await check.json();
+  if (!row || !row.is_admin || row.org_id !== orgId) throw new Error('Admin only');
+}
 
 const cors = () => ({
   'Access-Control-Allow-Origin': '*',
