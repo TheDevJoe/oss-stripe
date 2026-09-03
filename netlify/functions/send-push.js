@@ -20,7 +20,8 @@ export const handler = async (event) => {
     if (!title || !body) return json(400, { error: 'title and body required' });
 
     const ids = userIds.map(id => `"${id}"`).join(',');
-    const tokRes = await fetch(`${SUPA}/rest/v1/device_tokens?user_id=in.(${ids})&select=token`, {
+    const env = process.env.APNS_PRODUCTION === 'true' ? 'production' : 'sandbox';
+    const tokRes = await fetch(`${SUPA}/rest/v1/device_tokens?user_id=in.(${ids})&environment=eq.${env}&select=token`, {
       headers: { apikey: SERVICE, Authorization: `Bearer ${SERVICE}` }
     });
     const tokens = (await tokRes.json()).map(r => r.token);
