@@ -1,16 +1,13 @@
-import apn from 'apn';
+import http2 from 'node:http2';
+import jwt from 'jsonwebtoken';
 
 const SUPA = process.env.SUPABASE_URL;
 const SERVICE = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-const provider = new apn.Provider({
-  token: {
-    key: process.env.APNS_KEY_P8,
-    keyId: process.env.APNS_KEY_ID,
-    teamId: process.env.APNS_TEAM_ID
-  },
-  production: process.env.APNS_PRODUCTION === 'true'
-});
+const KEY_ID = process.env.APNS_KEY_ID;
+const TEAM_ID = process.env.APNS_TEAM_ID;
+const BUNDLE_ID = process.env.APNS_BUNDLE_ID;
+const KEY_P8 = process.env.APNS_KEY_P8;
+const PRODUCTION = process.env.APNS_PRODUCTION === 'true';
 
 export const handler = async (event) => {
   if (event.httpMethod === 'OPTIONS') return { statusCode: 200, headers: cors(), body: '' };
@@ -20,38 +17,75 @@ export const handler = async (event) => {
     if (!title || !body) return json(400, { error: 'title and body required' });
 
     const ids = userIds.map(id => `"${id}"`).join(',');
-    const env = process.env.APNS_PRODUCTION === 'true' ? 'production' : 'sandbox';
+    const env = PRODUCTION ? 'production' : 'sandbox';
     const tokRes = await fetch(`${SUPA}/rest/v1/device_tokens?user_id=in.(${ids})&environment=eq.${env}&select=token`, {
       headers: { apikey: SERVICE, Authorization: `Bearer ${SERVICE}` }
     });
     const tokens = (await tokRes.json()).map(r => r.token);
     if (tokens.length === 0) return json(200, { sent: 0, failed: 0 });
 
-    const note = new apn.Notification();
-    note.expiry = Math.floor(Date.now() / 1000) + 3600;
-    note.sound = 'default';
-    note.alert = { title, body };
-    note.topic = process.env.APNS_BUNDLE_ID;
-    note.payload = { kind: kind || 'generic' };
-    if (kind === 'sos') note.sound = 'default';
+    const jwtToken = jwt.sign({}, KEY_P8, {
+      algorithm: 'ES256',
+      header: { alg: 'ES256', kid: KEY_ID },
+      issuer: TEAM_ID,
+      expiresIn: '1h'
+    });
 
-    const result = await provider.send(note, tokens);
+    const host = PRODUCTION ? 'api.push.apple.com' : 'api.sandbox.push.apple.com';
+    const payload = JSON.stringify({
+      aps: { alert: { title, body }, sound: 'default' },
+      kind: kind || 'generic'
+    });
 
-    for (const failed of result.failed || []) {
-      const reason = failed.response?.reason;
-      if (failed.status === '410' || reason === 'BadDeviceToken' || reason === 'Unregistered') {
-        await fetch(`${SUPA}/rest/v1/device_tokens?token=eq.${encodeURIComponent(failed.device)}`, {
-          method: 'DELETE',
-          headers: { apikey: SERVICE, Authorization: `Bearer ${SERVICE}`, Prefer: 'return=minimal' }
-        });
+    let sent = 0, failed = 0;
+    const invalidTokens = [];
+    for (const token of tokens) {
+      const res = await sendOne(host, token, payload, jwtToken);
+      if (res.status === 200) sent++;
+      else {
+        failed++;
+        if (res.status === 410 || res.status === 400) invalidTokens.push(token);
       }
     }
 
-    return json(200, { sent: result.sent.length, failed: result.failed.length });
+    for (const t of invalidTokens) {
+      await fetch(`${SUPA}/rest/v1/device_tokens?token=eq.${encodeURIComponent(t)}`, {
+        method: 'DELETE',
+        headers: { apikey: SERVICE, Authorization: `Bearer ${SERVICE}`, Prefer: 'return=minimal' }
+      });
+    }
+
+    return json(200, { sent, failed });
   } catch (e) {
     return json(500, { error: e.message });
   }
 };
+
+function sendOne(host, token, payload, jwtToken) {
+  return new Promise((resolve) => {
+    const client = http2.connect(`https://${host}`);
+    let settled = false;
+    const done = (result) => { if (!settled) { settled = true; try { client.close(); } catch {} resolve(result); } };
+    client.on('error', (err) => done({ status: 0, error: err.message }));
+    const req = client.request({
+      ':method': 'POST',
+      ':path': `/3/device/${token}`,
+      'authorization': `bearer ${jwtToken}`,
+      'apns-topic': BUNDLE_ID,
+      'apns-priority': '10',
+      'apns-push-type': 'alert',
+      'content-type': 'application/json'
+    });
+    let status = 0; let bodyText = '';
+    req.on('response', (headers) => { status = headers[':status']; });
+    req.on('data', (chunk) => { bodyText += chunk; });
+    req.on('end', () => done({ status, body: bodyText }));
+    req.on('error', (err) => done({ status: 0, error: err.message }));
+    req.setTimeout(10000, () => done({ status: 0, error: 'timeout' }));
+    req.write(payload);
+    req.end();
+  });
+}
 
 const cors = () => ({
   'Access-Control-Allow-Origin': '*',
