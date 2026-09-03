@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "type": "module",
   "dependencies": {
-    "stripe": "^17.7.0"
+    "stripe": "^17.7.0",
+    "apn": "^2.2.0"
   }
 }
