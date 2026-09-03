@@ -22,9 +22,11 @@ export const handler = async (event) => {
       headers: { apikey: SERVICE, Authorization: `Bearer ${SERVICE}` }
     });
     const tokens = (await tokRes.json()).map(r => r.token);
-    if (tokens.length === 0) return json(200, { sent: 0, failed: 0 });
+    console.log(`send-push: userIds=${userIds.length} env=${env} tokensFound=${tokens.length}`);
+    if (tokens.length === 0) return json(200, { sent: 0, failed: 0, note: 'no tokens for env' });
 
-    const jwtToken = jwt.sign({}, KEY_P8, {
+    const normalizedKey = (KEY_P8 || '').replace(/\\n/g, '\n');
+    const jwtToken = jwt.sign({}, normalizedKey, {
       algorithm: 'ES256',
       header: { alg: 'ES256', kid: KEY_ID },
       issuer: TEAM_ID,
@@ -41,6 +43,7 @@ export const handler = async (event) => {
     const invalidTokens = [];
     for (const token of tokens) {
       const res = await sendOne(host, token, payload, jwtToken);
+      console.log(`apns: token=${token.substring(0, 8)}... status=${res.status} body=${res.body || res.error || ''}`);
       if (res.status === 200) sent++;
       else {
         failed++;
