@@ -1,16 +1,22 @@
+// Created by Joseph Foss on 9/23/26
 import Stripe from 'stripe';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 const SUPA = process.env.SUPABASE_URL;
 const SERVICE = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const PLATFORM_FEE_CENTS = 150;
+const PLATFORM_FEE_CENTS = 150; // what you keep, clean, on every gift
+
+// Stripe's card fee (2.9% + 30¢). With destination charges Stripe bills the platform,
+// so it's added to the application fee — the church covers it, you net a true $1.50.
+const stripeFee = (cents) => Math.round(cents * 0.029) + 30;
 
 export const handler = async (event) => {
   if (event.httpMethod === 'OPTIONS') return { statusCode: 200, headers: cors(), body: '' };
   try {
+    // amountCents from the app is the donor's TOTAL: gift + $1.50.
     const { orgId, amountCents, donorName, donorEmail } = JSON.parse(event.body || '{}');
     if (!orgId || !amountCents) return json(400, { error: 'orgId and amountCents required' });
-    if (amountCents < 200) return json(400, { error: 'Minimum donation is $2.00' });
+    if (amountCents < 200 + PLATFORM_FEE_CENTS) return json(400, { error: 'Minimum donation is $2.00' });
 
     const orgRes = await fetch(`${SUPA}/rest/v1/organizations?id=eq.${orgId}&select=stripe_account_id,stripe_charges_enabled,name`, {
       headers: { apikey: SERVICE, Authorization: `Bearer ${SERVICE}` }
@@ -27,12 +33,12 @@ export const handler = async (event) => {
         price_data: {
           currency: 'usd',
           product_data: { name: `Donation to ${org.name}` },
-          unit_amount: amountCents,
+          unit_amount: amountCents
         },
-        quantity: 1,
+        quantity: 1
       }],
       payment_intent_data: {
-        application_fee_amount: PLATFORM_FEE_CENTS,
+        application_fee_amount: PLATFORM_FEE_CENTS + stripeFee(amountCents),
         transfer_data: { destination: org.stripe_account_id },
         description: `Donation to ${org.name}`,
         metadata: { org_id: orgId, donor_name: donorName || '', donor_email: donorEmail || '' }
@@ -58,3 +64,4 @@ const json = (statusCode, body) => ({
   headers: { 'Content-Type': 'application/json', ...cors() },
   body: JSON.stringify(body)
 });
+// ;-)
