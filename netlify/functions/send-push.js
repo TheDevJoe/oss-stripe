@@ -13,7 +13,8 @@ const SERVICE = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const ANON = process.env.SUPABASE_ANON_KEY || SERVICE;
 const KEY_ID = process.env.APNS_KEY_ID;
 const TEAM_ID = process.env.APNS_TEAM_ID;
-const BUNDLE_ID = process.env.APNS_BUNDLE_ID;
+/** The app's own ID with Apple, from the Xcode project. Apple refuses a push sent under any other. */
+const BUNDLE_ID = 'com.josephfoss.Our-Sunday-Schedule';
 const KEY_P8 = (process.env.APNS_KEY_P8 || '').replace(/\\n/g, '\n');
 
 const ADMIN_ONLY = new Set(['sos', 'announce']);
