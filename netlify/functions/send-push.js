@@ -1,7 +1,10 @@
-// Created by Joseph Foss on 10/5/26 · Updated 10/6/26
-// Our Sunday Schedule — chat, callout, announcement and SOS pushes.
+// Created by Joseph Foss on 10/5/26 · Updated 10/16/26
+// Our Sunday Schedule — chat, callout, announcement and SOS pushes, and "someone wants to join".
 // Only a signed-in church member can send, only to people in their own church, and only admins
-// can send SOS or announcements. Every phone is sent to its own APNs environment (TestFlight or Xcode).
+// can send SOS or announcements. Someone waiting to get into a church can send one thing: a ping to
+// that church's leaders that they're waiting, with words the server picks. A church claim to check and a
+// reported message also reach the app's owner, whatever church they come from. Every phone is sent to its
+// own APNs environment (TestFlight or Xcode).
 import http2 from 'node:http2';
 import jwt from 'jsonwebtoken';
 
@@ -14,41 +17,48 @@ const BUNDLE_ID = process.env.APNS_BUNDLE_ID;
 const KEY_P8 = (process.env.APNS_KEY_P8 || '').replace(/\\n/g, '\n');
 
 const ADMIN_ONLY = new Set(['sos', 'announce']);
+/** Pings that also go to the app's owner, from any church. */
+const OWNER_PINGS = new Set(['claim', 'report']);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export const handler = async (event) => {
   if (event.httpMethod === 'OPTIONS') return { statusCode: 200, headers: cors(), body: '' };
   if (event.httpMethod !== 'POST') return json(405, { error: 'POST only' });
   try {
-    const sender = await signedInSender(event.headers || {});
-    if (!sender) return json(401, { error: 'Sign in required' });
+    const user = await signedInUser(event.headers || {});
+    if (!user) return json(401, { error: 'Sign in required' });
 
     const { userIds, title, body, kind = 'generic', data = {} } = JSON.parse(event.body || '{}');
+    const sender = await memberFor(user.email);
+    if (!sender) {
+      // Not in a church yet: they can ask to be let in, or tell the app's owner a church is theirs.
+      if (kind === 'join') return await askLeaders(user.email);
+      if (kind !== 'claim') return json(401, { error: 'Sign in required' });
+    }
     if (!Array.isArray(userIds) || userIds.length === 0) return json(400, { error: 'userIds required' });
     if (!title || !body) return json(400, { error: 'title and body required' });
-    if (ADMIN_ONLY.has(kind) && !sender.is_admin) return json(403, { error: 'Only church admins can send this' });
+    if (ADMIN_ONLY.has(kind) && !sender?.is_admin) return json(403, { error: 'Only church admins can send this' });
 
-    // Only real IDs (they go into a database filter) and only people in the sender's church.
-    const ids = [...new Set(userIds.map(String))].filter((id) => UUID.test(id) && id !== sender.id);
+    // Only real IDs (they go into a database filter), only people in the sender's church, and the app's owner
+    // for the pings meant for them.
+    const ids = [...new Set(userIds.map(String))].filter((id) => UUID.test(id) && id !== sender?.id);
     if (ids.length === 0) return json(200, { sent: 0, failed: 0 });
-    const members = await rest(`users?id=in.(${ids.join(',')})&org_id=eq.${sender.org_id}&select=id`);
-    if (members.length === 0) return json(200, { sent: 0, failed: 0 });
+    const allowed = new Set();
+    if (sender) {
+      for (const m of await rest(`users?id=in.(${ids.join(',')})&org_id=eq.${sender.org_id}&select=id`)) allowed.add(m.id);
+    }
+    if (OWNER_PINGS.has(kind)) {
+      for (const id of await owners(ids)) allowed.add(id);
+    }
+    if (allowed.size === 0) return json(200, { sent: 0, failed: 0 });
 
-    const devices = await rest(`device_tokens?user_id=in.(${members.map((m) => m.id).join(',')})&select=apns_token,environment`);
+    const devices = await rest(`device_tokens?user_id=in.(${[...allowed].join(',')})&select=apns_token,environment`);
     if (devices.length === 0) return json(200, { sent: 0, failed: 0, note: 'no devices registered' });
 
     const results = await sendAll(devices, JSON.stringify(buildPayload(title, body, kind, data)));
-
-    // Forget phones Apple says are gone. Only these two answers mean the token itself is bad.
-    const dead = results.filter((r) => r.status === 410 || (r.status === 400 && /BadDeviceToken/.test(r.body || '')));
-    for (const r of dead) {
-      await fetch(`${SUPA}/rest/v1/device_tokens?apns_token=eq.${encodeURIComponent(r.token)}`, {
-        method: 'DELETE',
-        headers: { apikey: SERVICE, Authorization: `Bearer ${SERVICE}`, Prefer: 'return=minimal' }
-      });
-    }
+    const removed = await forgetDead(results);
     const sent = results.filter((r) => r.status === 200).length;
-    console.log(`send-push: kind=${kind} devices=${devices.length} sent=${sent} removed=${dead.length}`);
+    console.log(`send-push: kind=${kind} devices=${devices.length} sent=${sent} removed=${removed}`);
     return json(200, { sent, failed: results.length - sent });
   } catch (e) {
     console.error('send-push error:', e);
@@ -56,17 +66,58 @@ export const handler = async (event) => {
   }
 };
 
-/** The church member behind the app's session token, or null. */
-async function signedInSender(headers) {
+/** The signed-in account behind the app's session token, or null. */
+async function signedInUser(headers) {
   const auth = headers.authorization || headers.Authorization || '';
   const token = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
   if (!token) return null;
   const r = await fetch(`${SUPA}/auth/v1/user`, { headers: { apikey: ANON, Authorization: `Bearer ${token}` } });
   if (!r.ok) return null;
   const user = await r.json();
-  if (!user || !user.email) return null;
-  const rows = await rest(`users?email=eq.${encodeURIComponent(user.email)}&select=id,org_id,is_admin&limit=1`);
+  return user && user.email ? user : null;
+}
+
+/** That account's place in a church, or null when it isn't in one yet. */
+async function memberFor(email) {
+  const rows = await rest(`users?email=eq.${encodeURIComponent(email)}&select=id,org_id,is_admin&limit=1`);
   return rows[0] || null;
+}
+
+/** Which of these people are the app's owner. */
+async function owners(ids) {
+  const emails = (await rest('app_owners?select=email')).map((o) => `"${o.email}"`);
+  if (emails.length === 0) return [];
+  const rows = await rest(`users?id=in.(${ids.join(',')})&email=in.(${encodeURIComponent(emails.join(','))})&select=id`);
+  return rows.map((r) => r.id);
+}
+
+/** Someone waiting to join: tells the church's leaders, with the server's own words and nothing else. */
+async function askLeaders(email) {
+  const asks = await rest(`join_requests?email=eq.${encodeURIComponent(email)}&select=org_id,full_name&limit=1`);
+  if (asks.length === 0) return json(200, { sent: 0, failed: 0 });
+  const leaders = await rest(`users?org_id=eq.${asks[0].org_id}&is_admin=eq.true&select=id`);
+  if (leaders.length === 0) return json(200, { sent: 0, failed: 0 });
+  const devices = await rest(`device_tokens?user_id=in.(${leaders.map((l) => l.id).join(',')})&select=apns_token,environment`);
+  if (devices.length === 0) return json(200, { sent: 0, failed: 0, note: 'no devices registered' });
+  const name = String(asks[0].full_name || 'Someone').slice(0, 60);
+  const payload = buildPayload('Someone wants to join', `${name} is waiting for you to let them in.`, 'join', {});
+  const results = await sendAll(devices, JSON.stringify(payload));
+  const removed = await forgetDead(results);
+  const sent = results.filter((r) => r.status === 200).length;
+  console.log(`send-push: kind=join devices=${devices.length} sent=${sent} removed=${removed}`);
+  return json(200, { sent, failed: results.length - sent });
+}
+
+/** Forgets phones Apple says are gone. Only these two answers mean the token itself is bad. */
+async function forgetDead(results) {
+  const dead = results.filter((r) => r.status === 410 || (r.status === 400 && /BadDeviceToken/.test(r.body || '')));
+  for (const r of dead) {
+    await fetch(`${SUPA}/rest/v1/device_tokens?apns_token=eq.${encodeURIComponent(r.token)}`, {
+      method: 'DELETE',
+      headers: { apikey: SERVICE, Authorization: `Bearer ${SERVICE}`, Prefer: 'return=minimal' }
+    });
+  }
+  return dead.length;
 }
 
 async function rest(path) {
