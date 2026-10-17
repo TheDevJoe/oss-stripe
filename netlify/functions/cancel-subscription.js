@@ -1,3 +1,5 @@
+// Updated 10/17/26 · Stops a recurring gift. The subscription lives on the platform's Stripe account
+// (destination charges), so it's cancelled there — not on the church's account.
 import Stripe from 'stripe';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
@@ -17,11 +19,12 @@ export const handler = async (event) => {
     const user = await userRes.json();
     if (!user.email) return json(401, { error: 'Not authenticated' });
 
-    const subRes = await fetch(`${SUPA}/rest/v1/donation_subscriptions?id=eq.${subscriptionId}&select=stripe_subscription_id,donor_email,donor_user_id,org_id`, {
+    const subRes = await fetch(`${SUPA}/rest/v1/donation_subscriptions?id=eq.${encodeURIComponent(subscriptionId)}&select=stripe_subscription_id,donor_email,donor_user_id,org_id`, {
       headers: { apikey: SERVICE, Authorization: `Bearer ${SERVICE}` }
     });
     const [sub] = await subRes.json();
     if (!sub) return json(404, { error: 'Subscription not found' });
+    if (!sub.stripe_subscription_id) return json(400, { error: 'This gift has no Stripe subscription' });
 
     const isOwner = sub.donor_email === user.email;
     if (!isOwner) {
@@ -34,15 +37,9 @@ export const handler = async (event) => {
       if (!isDonorById && !isAdmin) return json(403, { error: 'Not allowed' });
     }
 
-    const orgRes = await fetch(`${SUPA}/rest/v1/organizations?id=eq.${sub.org_id}&select=stripe_account_id`, {
-      headers: { apikey: SERVICE, Authorization: `Bearer ${SERVICE}` }
-    });
-    const [org] = await orgRes.json();
-    if (!org || !org.stripe_account_id) return json(400, { error: 'Church Stripe account missing' });
+    await stripe.subscriptions.cancel(sub.stripe_subscription_id);
 
-    await stripe.subscriptions.cancel(sub.stripe_subscription_id, {}, { stripeAccount: org.stripe_account_id });
-
-    await fetch(`${SUPA}/rest/v1/donation_subscriptions?id=eq.${subscriptionId}`, {
+    await fetch(`${SUPA}/rest/v1/donation_subscriptions?id=eq.${encodeURIComponent(subscriptionId)}`, {
       method: 'PATCH',
       headers: {
         apikey: SERVICE,
@@ -62,7 +59,7 @@ export const handler = async (event) => {
 const cors = () => ({
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type'
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization'
 });
 const json = (statusCode, body) => ({
   statusCode,

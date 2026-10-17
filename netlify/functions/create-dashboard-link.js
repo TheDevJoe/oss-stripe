@@ -1,3 +1,4 @@
+// Updated 10/17/26 · Opens the church's Stripe dashboard (payouts, receipts). Church leaders only.
 import Stripe from 'stripe';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
@@ -17,13 +18,13 @@ export const handler = async (event) => {
     const user = await userRes.json();
     if (!user.email) return json(401, { error: 'Not authenticated' });
 
-    const check = await fetch(`${SUPA}/rest/v1/users?email=eq.${user.email}&select=is_admin,org_id`, {
+    const check = await fetch(`${SUPA}/rest/v1/users?email=eq.${encodeURIComponent(user.email)}&select=is_admin,org_id`, {
       headers: { apikey: SERVICE, Authorization: `Bearer ${SERVICE}` }
     });
     const [row] = await check.json();
     if (!row || !row.is_admin || row.org_id !== orgId) return json(403, { error: 'Admin only' });
 
-    const orgRes = await fetch(`${SUPA}/rest/v1/organizations?id=eq.${orgId}&select=stripe_account_id`, {
+    const orgRes = await fetch(`${SUPA}/rest/v1/organizations?id=eq.${encodeURIComponent(orgId)}&select=stripe_account_id`, {
       headers: { apikey: SERVICE, Authorization: `Bearer ${SERVICE}` }
     });
     const [org] = await orgRes.json();
@@ -39,7 +40,7 @@ export const handler = async (event) => {
 const cors = () => ({
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type'
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization'
 });
 const json = (statusCode, body) => ({
   statusCode,

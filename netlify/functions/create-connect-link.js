@@ -1,3 +1,4 @@
+// Updated 10/17/26 · Opens Stripe's setup pages so a church can receive gifts. Church leaders only.
 import Stripe from 'stripe';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
@@ -15,7 +16,7 @@ export const handler = async (event) => {
 
     await requireAdmin(jwt, orgId);
 
-    const orgRes = await fetch(`${SUPA}/rest/v1/organizations?id=eq.${orgId}&select=stripe_account_id,name`, {
+    const orgRes = await fetch(`${SUPA}/rest/v1/organizations?id=eq.${encodeURIComponent(orgId)}&select=stripe_account_id,name`, {
       headers: { apikey: SERVICE, Authorization: `Bearer ${SERVICE}` }
     });
     const [org] = await orgRes.json();
@@ -32,7 +33,7 @@ export const handler = async (event) => {
         business_profile: { name: org.name, mcc: '8398' }
       });
       accountId = account.id;
-      await fetch(`${SUPA}/rest/v1/organizations?id=eq.${orgId}`, {
+      await fetch(`${SUPA}/rest/v1/organizations?id=eq.${encodeURIComponent(orgId)}`, {
         method: 'PATCH',
         headers: { apikey: SERVICE, Authorization: `Bearer ${SERVICE}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ stripe_account_id: accountId })
@@ -58,7 +59,7 @@ async function requireAdmin(jwt, orgId) {
   });
   const user = await userRes.json();
   if (!user.email) throw new Error('Not authenticated');
-  const check = await fetch(`${SUPA}/rest/v1/users?email=eq.${user.email}&select=is_admin,org_id`, {
+  const check = await fetch(`${SUPA}/rest/v1/users?email=eq.${encodeURIComponent(user.email)}&select=is_admin,org_id`, {
     headers: { apikey: SERVICE, Authorization: `Bearer ${SERVICE}` }
   });
   const [row] = await check.json();
@@ -68,7 +69,7 @@ async function requireAdmin(jwt, orgId) {
 const cors = () => ({
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type'
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization'
 });
 const json = (statusCode, body) => ({
   statusCode,
