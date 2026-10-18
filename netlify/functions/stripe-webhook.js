@@ -1,6 +1,9 @@
+// Updated 10/17/26 · Records gifts from Stripe. Works with any webhook API version: each event's object is fetched
+// fresh through this file's Stripe library (2025-02-24.acacia), so the fields read below are always where they're
+// expected, whatever version the Stripe dashboard sends events in.
 import Stripe from 'stripe';
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: '2025-02-24.acacia' });
 const SUPA = process.env.SUPABASE_URL;
 const SERVICE = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET;
@@ -23,20 +26,22 @@ export const handler = async (event) => {
   }
 
   const connectedAccount = stripeEvent.account || null;
+  const stripeOpts = connectedAccount ? { stripeAccount: connectedAccount } : undefined;
+  const id = stripeEvent.data?.object?.id;
 
   try {
     switch (stripeEvent.type) {
       case 'checkout.session.completed':
-        await handleCheckoutCompleted(stripeEvent.data.object, connectedAccount);
+        await handleCheckoutCompleted(await stripe.checkout.sessions.retrieve(id, {}, stripeOpts), connectedAccount);
         break;
       case 'invoice.paid':
-        await handleInvoicePaid(stripeEvent.data.object, connectedAccount);
+        await handleInvoicePaid(await stripe.invoices.retrieve(id, {}, stripeOpts), connectedAccount);
         break;
       case 'customer.subscription.deleted':
-        await handleSubscriptionDeleted(stripeEvent.data.object);
+        await handleSubscriptionDeleted(await stripe.subscriptions.retrieve(id, {}, stripeOpts));
         break;
       case 'customer.subscription.updated':
-        await handleSubscriptionUpdated(stripeEvent.data.object);
+        await handleSubscriptionUpdated(await stripe.subscriptions.retrieve(id, {}, stripeOpts));
         break;
     }
     return { statusCode: 200, body: 'ok' };
@@ -204,3 +209,4 @@ async function upsert(table, row, conflictColumn) {
   });
   if (!res.ok) throw new Error(`${table} upsert failed: ${await res.text()}`);
 }
+// ;-)
