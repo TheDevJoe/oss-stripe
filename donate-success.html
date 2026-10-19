@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<!-- Created by Joseph Foss on 10/17/26 · Where Stripe sends a donor after checking out — brings them back to the app -->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="refresh" content="1; url=oursundayschedule://donated">
+<title>Thank You</title>
+<style>
+  body { font-family: -apple-system, sans-serif; background: #F8FAFC; text-align: center; padding: 80px 24px; color: #1E1B2E; }
+  .card { max-width: 400px; margin: 0 auto; background: white; border-radius: 20px; padding: 40px 24px; }
+  .icon { width: 64px; height: 64px; border-radius: 16px; background: linear-gradient(135deg, #22C55E, #16A34A); display: inline-flex; align-items: center; justify-content: center; font-size: 32px; color: white; margin-bottom: 20px; }
+  h1 { font-size: 26px; margin: 0 0 10px; }
+  p { font-size: 17px; line-height: 1.5; color: #4B4860; margin: 0 0 24px; }
+  a.btn { display: block; padding: 16px; border-radius: 14px; background: linear-gradient(135deg, #22C55E, #16A34A); color: white; font-weight: 700; font-size: 17px; text-decoration: none; }
+  @media (prefers-color-scheme: dark) { body { background: #14121C; color: #F2F0F7; } .card { background: #1E1B2A; } p { color: #A9A5BC; } }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="icon">♥</div>
+  <h1>Thank You</h1>
+  <p>Your gift is on its way to your church. You can see it in the app under My Donations.</p>
+  <a class="btn" href="oursundayschedule://donated">Back to the App</a>
+</div>
+</body>
+</html>
