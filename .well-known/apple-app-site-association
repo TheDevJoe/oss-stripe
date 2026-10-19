@@ -1,10 +1,14 @@
 {
   "applinks": {
-    "apps": [],
     "details": [
       {
-        "appID": "Q7E2KM97KA.com.josephfoss.Our-Sunday-Schedule",
-        "paths": ["*"]
+        "appIDs": ["Q7E2KM97KA.com.josephfoss.Our-Sunday-Schedule"],
+        "components": [
+          { "/": "/return", "comment": "Back from setting up donations with Stripe" },
+          { "/": "/refresh", "comment": "A Stripe setup link that ran out" },
+          { "/": "/donate-success", "comment": "Back from giving" },
+          { "/": "/donate-cancel", "comment": "Back from a gift that wasn't made" }
+        ]
       }
     ]
   }
